@@ -13,6 +13,71 @@
   let currentVideoUrl = $state(null);
   let showThanks = $state(false);
   let activeInterval = $state(15);
+  let countdown = $state('');
+
+  // Main-thread scheduler — much more reliable than SW setTimeout on desktop,
+  // since browsers kill idle service workers after ~30 s.
+  let mainSchedulerHandle = null;
+  let nextFireAt = 0;
+
+  // Live countdown display
+  let countdownTick = null;
+  function startCountdown() {
+    stopCountdown();
+    countdownTick = setInterval(() => {
+      const remaining = nextFireAt - Date.now();
+      if (remaining <= 0) {
+        countdown = 'any moment…';
+        stopCountdown();
+        return;
+      }
+      const m = Math.floor(remaining / 60000);
+      const s = Math.floor((remaining % 60000) / 1000);
+      countdown = `${m}:${s.toString().padStart(2, '0')}`;
+    }, 500);
+  }
+  function stopCountdown() {
+    if (countdownTick) { clearInterval(countdownTick); countdownTick = null; }
+    countdown = '';
+  }
+
+  function startMainScheduler(mins) {
+    stopMainScheduler();
+    nextFireAt = Date.now() + mins * 60 * 1000;
+    startCountdown();
+    mainSchedulerHandle = setInterval(() => {
+      nextFireAt = Date.now() + mins * 60 * 1000;
+      startCountdown();
+      triggerNotification();
+    }, mins * 60 * 1000);
+  }
+
+  function stopMainScheduler() {
+    if (mainSchedulerHandle !== null) {
+      clearInterval(mainSchedulerHandle);
+      mainSchedulerHandle = null;
+    }
+    stopCountdown();
+  }
+
+  // Show the notification via the SW registration so the SW's notificationclick
+  // handler fires even when the page is open, routing the click back here.
+  async function triggerNotification() {
+    const videoUrl = videoUrls[Math.floor(Math.random() * videoUrls.length)];
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification('Time for a break! 🎬', {
+        body: `Your ${activeInterval}-minute reminder. Tap to watch.`,
+        icon: '/icon.svg',
+        data: { videoUrl, interval: activeInterval },
+        tag: 'video-reminder',
+        vibrate: [200, 100, 200]
+      });
+    } catch {
+      // SW unavailable — open video inline as fallback
+      openVideo(videoUrl);
+    }
+  }
 
   onMount(() => {
     swSupported = 'serviceWorker' in navigator;
@@ -28,9 +93,9 @@
         const saved = JSON.parse(raw);
         interval = saved.interval ?? 15;
         activeInterval = interval;
-        // Re-activate only if permission still granted
         if (saved.isActive && Notification.permission === 'granted') {
           isActive = true;
+          startMainScheduler(interval);
         }
       } catch {
         // Ignore corrupt storage
@@ -39,7 +104,7 @@
 
     if (!swSupported) return;
 
-    // Listen for PLAY_VIDEO from service worker (notification clicked while app was open)
+    // Listen for PLAY_VIDEO from SW (notification click while app was open)
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'PLAY_VIDEO') {
         activeInterval = event.data.interval ?? interval;
@@ -47,7 +112,7 @@
       }
     });
 
-    // Handle ?play= URL param (notification clicked while app was closed)
+    // Handle ?play= URL param (notification click while app was closed)
     const params = new URLSearchParams(location.search);
     if (params.has('play')) {
       activeInterval = parseInt(params.get('interval') ?? String(interval));
@@ -55,29 +120,32 @@
       history.replaceState(null, '', location.pathname);
     }
 
-    // Once SW is ready, re-register the active schedule
+    // Also register with SW as backup scheduler (handles app-is-closed case)
     navigator.serviceWorker.ready.then((reg) => {
       if (isActive) {
         reg.active?.postMessage({ type: 'START_NOTIFICATIONS', interval, videos: videoUrls });
       }
     });
 
-    // Refresh permission status when user returns to tab (they may have changed it in settings)
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && 'Notification' in window) {
         permission = Notification.permission;
         if (permission === 'denied' && isActive) {
           isActive = false;
+          stopMainScheduler();
           persist();
           sendToSW('STOP_NOTIFICATIONS');
         }
       }
     });
+
+    return () => stopMainScheduler();
   });
 
   async function toggleActive() {
     if (isActive) {
       isActive = false;
+      stopMainScheduler();
       persist();
       sendToSW('STOP_NOTIFICATIONS');
       return;
@@ -94,6 +162,7 @@
 
     isActive = true;
     activeInterval = interval;
+    startMainScheduler(interval);
     persist();
     sendToSW('START_NOTIFICATIONS', { interval, videos: videoUrls });
   }
@@ -103,6 +172,7 @@
     persist();
     if (isActive) {
       activeInterval = mins;
+      startMainScheduler(mins);
       sendToSW('START_NOTIFICATIONS', { interval: mins, videos: videoUrls });
     }
   }
@@ -206,7 +276,7 @@
     <div class="status-row" class:active-status={isActive}>
       {#if isActive}
         <span class="pulse-dot" aria-hidden="true"></span>
-        Active — notifying every {activeInterval} minutes
+        Next in <strong>{countdown || '…'}</strong>
       {:else}
         <span class="idle-dot" aria-hidden="true"></span>
         Reminders are off
@@ -420,6 +490,11 @@
 
   .status-row.active-status {
     color: var(--success);
+  }
+
+  .status-row strong {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }
 
   .pulse-dot {
