@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(New-Item -ItemType Directory -Force \"X:\\\\2026, lepiej\\\\video-reminder-pwa\\\\src\\\\lib\")",
+      "Bash(Out-Null)",
+      "Bash(New-Item -ItemType Directory -Force \"X:\\\\2026, lepiej\\\\video-reminder-pwa\\\\src\\\\routes\")",
+      "Bash(New-Item -ItemType Directory -Force \"X:\\\\2026, lepiej\\\\video-reminder-pwa\\\\static\")",
+      "Bash(Write-Output \"Directories created\")",
+      "Bash(npm install *)",
+      "Bash(npm run *)"
+    ]
+  }
+}

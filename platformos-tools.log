@@ -1,0 +1,3 @@
+[2026-05-23T09:37:34.553Z] [platformos-tools] lsp-mcp-server started: ROOT=X:\2026, lepiej
+[2026-05-23T09:37:34.571Z] [platformos-tools] LSP init failed: spawn pos-cli ENOENT
+[2026-05-23T09:37:35.274Z] session started: cwd=X:\2026, lepiej
